@@ -114,8 +114,3 @@ Lorsque vous déposez un fichier dans la zone de dépôt (DIV `#dropZone`), voic
 
 ---
 
-## 📦 Installation et déploiement
-
-1. Clonez ce dépôt :
-   ```bash
-   git clone https://github.com/<votre-utilisateur>/snapfile.git
