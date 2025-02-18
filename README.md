@@ -2,7 +2,7 @@
 
 SnapFile est une application web qui permet de gérer des fichiers de manière locale dans le navigateur. Elle est idéale pour stocker, sauvegarder et versionner des fichiers. Utilisant IndexedDB pour le stockage, cette application est disponible hors ligne et vous permet une gestion avancée de vos fichiers.
 
----
+![snapfile](snapfile.png)
 
 ## 📖 Fonctionnalités
 
