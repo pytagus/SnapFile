@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Stockage de Fichiers Base64 avec Versions</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            max-width: 800px; 
+            margin: 0 auto; 
+            padding: 20px; 
+        }
+        #dropZone {
+            border: 2px dashed #ccc;
+            border-radius: 20px;
+            width: calc(100% - 20px); /* Soustrait le padding des conteneurs de lots */
+            font-family: sans-serif;
+            margin: 20px auto;
+            padding: 30px 10px; /* Augmente le padding vertical de 10px à 30px */
+            text-align: center;
+        }
+        #dropZone.highlight {
+            border-color: purple;
+        }
+        #fileList {
+            margin-top: 20px;
+        }
+        .file-group {
+            background-color: #f4f4f4;
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .file-versions {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .file-version {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            border-bottom: 1px solid #ddd;
+        }
+        .version-details {
+            flex-grow: 1;
+            margin-right: 10px;
+        }
+        .version-actions {
+            display: flex;
+            gap: 5px;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.4);
+        }
+        .modal-content {
+            background-color: #fefefe;
+            margin: 15% auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%;
+            max-width: 600px;
+        }
+        .group-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .group-actions {
+            display: flex;
+            gap: 10px;
+        }
+        .delete-batch-btn {
+            background-color: #cb0000d4;
+            color: #ffffff;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .backup-controls {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .backup-btn {
+            background-color: transparent;
+            border: 1px solid #888;
+            color: #333;
+            padding: 5px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: all 0.3s ease;
+        }
+        .backup-btn:hover {
+            background-color: #f4f4f4;
+            border-color: #555;
+        }
+        #backupFileInput {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="backup-controls">
+        <button id="backupBtn" class="backup-btn">Sauvegarder</button>
+        <label for="backupFileInput" class="backup-btn">Restaurer</label>
+        <input type="file" id="backupFileInput" accept=".json">
+    </div>
+    <div id="dropZone">
+        Déposez vos fichiers ici
+    </div>
+    <div id="fileList"></div>
+
+    <div id="versionModal" class="modal">
+        <div class="modal-content">
+            <h2 id="modalTitle">Versions du fichier</h2>
+            <div id="modalVersionList"></div>
+            <button id="closeModalBtn">Fermer</button>
+        </div>
+    </div>
+
+    <script>
+        class FileStorage {
+            constructor() {
+                this.db = null;
+                this.initDatabase();
+                this.initEventListeners();
+            }
+
+            initDatabase() {
+                const request = indexedDB.open('SnapFileStorage', 1);
+
+                request.onupgradeneeded = (event) => {
+                    this.db = event.target.result;
+                    if (!this.db.objectStoreNames.contains('files')) {
+                        this.db.createObjectStore('files', { keyPath: 'groupName' });
+                    }
+                };
+
+                request.onsuccess = (event) => {
+                    this.db = event.target.result;
+                    this.getStoredFiles();
+                };
+
+                request.onerror = (event) => {
+                    console.error("Error opening IndexedDB:", event.target.error);
+                };
+            }
+
+            initEventListeners() {
+                const dropZone = document.getElementById('dropZone');
+                ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                    dropZone.addEventListener(eventName, this.preventDefaults, false);
+                });
+                dropZone.addEventListener('dragenter', this.highlight, false);
+                dropZone.addEventListener('dragover', this.highlight, false);
+                dropZone.addEventListener('dragleave', this.unhighlight, false);
+                dropZone.addEventListener('drop', this.handleDrop.bind(this), false);
+
+                document.getElementById('backupBtn').addEventListener('click', this.backupFiles.bind(this));
+                document.getElementById('backupFileInput').addEventListener('change', this.restoreFiles.bind(this));
+
+                // Add close modal button listener
+                const closeModalBtn = document.getElementById('closeModalBtn');
+                if (closeModalBtn) {
+                    closeModalBtn.addEventListener('click', this.closeVersionModal.bind(this));
+                }
+
+                // Add click outside modal to close
+                const versionModal = document.getElementById('versionModal');
+                if (versionModal) {
+                    versionModal.addEventListener('click', (event) => {
+                        if (event.target === versionModal) {
+                            this.closeVersionModal();
+                        }
+                    });
+                }
+            }
+
+            preventDefaults(e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+
+            highlight(e) {
+                const dropZone = document.getElementById('dropZone');
+                dropZone.classList.add('highlight');
+            }
+
+            unhighlight(e) {
+                const dropZone = document.getElementById('dropZone');
+                dropZone.classList.remove('highlight');
+            }
+
+            handleDrop(e) {
+                const dropZone = document.getElementById('dropZone');
+                this.unhighlight(e);
+                const dt = e.dataTransfer;
+                const files = dt.files;
+                this.processFiles(files);
+            }
+
+            processFiles(files) {
+                Array.from(files).forEach(file => this.processFile(file));
+            }
+
+            processFile(file) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const base64File = e.target.result;
+                    const versionId = this.generateVersionId();
+                    const groupName = file.name;
+
+                    const transaction = this.db.transaction(['files'], 'readwrite');
+                    const store = transaction.objectStore('files');
+
+                    const getRequest = store.get(groupName);
+                    getRequest.onsuccess = (event) => {
+                        const existingGroup = event.target.result || { groupName, versions: [] };
+                        
+                        const newVersion = {
+                            versionId: versionId,
+                            base64: base64File,
+                            timestamp: new Date().toISOString(),
+                            size: file.size,
+                            originalName: file.name,  // Store original filename
+                            type: file.type           // Store file type
+                        };
+
+                        existingGroup.versions.push(newVersion);
+                        
+                        const putRequest = store.put(existingGroup);
+                        putRequest.onsuccess = () => {
+                            this.getStoredFiles();
+                        };
+                        putRequest.onerror = (event) => {
+                            console.error("Error saving file:", event.target.error);
+                        };
+                    };
+                };
+                reader.readAsDataURL(file);
+            }
+
+            generateVersionId() {
+                return Math.random().toString(36).substr(2, 9);
+            }
+
+            getStoredFiles() {
+                const transaction = this.db.transaction(['files'], 'readonly');
+                const store = transaction.objectStore('files');
+                const request = store.getAll();
+
+                request.onsuccess = (event) => {
+                    const files = event.target.result.reduce((acc, group) => {
+                        acc[group.groupName] = group.versions;
+                        return acc;
+                    }, {});
+                    this.renderFileList(files);
+                };
+            }
+
+            renderFileList(files = {}) {
+                const fileListContainer = document.getElementById('fileList');
+                fileListContainer.innerHTML = '';
+
+                Object.entries(files).forEach(([groupName, groupFiles]) => {
+                    if (groupFiles.length === 0) return;  // Skip empty groups
+
+                    const groupDiv = document.createElement('div');
+                    groupDiv.classList.add('file-group');
+                    
+                    const groupHeader = document.createElement('div');
+                    groupHeader.classList.add('group-header');
+                    
+                    const groupTitle = document.createElement('h3');
+                    groupTitle.textContent = groupName;
+                    groupTitle.innerHTML += ` <small>(${groupFiles.length} versions)</small>`;
+                    
+                    const groupActions = document.createElement('div');
+                    groupActions.classList.add('group-actions');
+
+                    const versionsButton = document.createElement('button');
+                    versionsButton.textContent = 'Voir les versions';
+                    versionsButton.onclick = () => this.showVersionModal(groupName);
+
+                    const deleteBatchButton = document.createElement('button');
+                    deleteBatchButton.textContent = 'Supprimer le lot';
+                    deleteBatchButton.onclick = () => this.deleteBatch(groupName);
+                    deleteBatchButton.classList.add('delete-batch-btn');
+
+                    groupActions.appendChild(versionsButton);
+                    groupActions.appendChild(deleteBatchButton);
+
+                    groupHeader.appendChild(groupTitle);
+                    groupHeader.appendChild(groupActions);
+                    
+                    groupDiv.appendChild(groupHeader);
+
+                    fileListContainer.appendChild(groupDiv);
+                });
+            }
+
+            showVersionModal(groupName) {
+                const transaction = this.db.transaction(['files'], 'readonly');
+                const store = transaction.objectStore('files');
+                const request = store.get(groupName);
+
+                request.onsuccess = (event) => {
+                    const group = event.target.result;
+                    const modalVersionList = document.getElementById('modalVersionList');
+                    modalVersionList.innerHTML = '';
+                    
+                    group.versions.forEach((file, index) => {
+                        const versionItem = document.createElement('div');
+                        versionItem.classList.add('file-version');
+                        
+                        const versionDetails = document.createElement('div');
+                        versionDetails.classList.add('version-details');
+                        versionDetails.innerHTML = `
+                            <strong>Version ${index + 1}</strong><br>
+                            Taille: ${this.formatBytes(file.size)}<br>
+                            Ajouté le: ${new Date(file.timestamp).toLocaleString()}
+                        `;
+
+                        const versionActions = document.createElement('div');
+                        versionActions.classList.add('version-actions');
+                        
+                        const downloadButton = document.createElement('button');
+                        downloadButton.textContent = 'Télécharger';
+                        downloadButton.onclick = () => this.downloadFile(groupName, file.versionId);
+
+                        const deleteButton = document.createElement('button');
+                        deleteButton.textContent = 'Supprimer';
+                        deleteButton.onclick = () => this.deleteVersion(groupName, file.versionId);
+
+                        versionActions.appendChild(downloadButton);
+                        versionActions.appendChild(deleteButton);
+
+                        versionItem.appendChild(versionDetails);
+                        versionItem.appendChild(versionActions);
+
+                        modalVersionList.appendChild(versionItem);
+                    });
+
+                    const modal = document.getElementById('versionModal');
+                    modal.style.display = 'block';
+                };
+            }
+
+            downloadFile(groupName, versionId) {
+                const transaction = this.db.transaction(['files'], 'readonly');
+                const store = transaction.objectStore('files');
+                const request = store.get(groupName);
+
+                request.onsuccess = (event) => {
+                    const group = event.target.result;
+                    const version = group.versions.find(v => v.versionId === versionId);
+                    
+                    if (version) {
+                        // Extract base64 data
+                        const [header, base64Data] = version.base64.split(',');
+                        const mimeType = header.split(':')[1].split(';')[0];
+
+                        // Convert base64 to Blob
+                        const byteCharacters = atob(base64Data);
+                        const byteNumbers = new Array(byteCharacters.length);
+                        for (let i = 0; i < byteCharacters.length; i++) {
+                            byteNumbers[i] = byteCharacters.charCodeAt(i);
+                        }
+                        const byteArray = new Uint8Array(byteNumbers);
+                        const blob = new Blob([byteArray], { type: mimeType });
+
+                        // Create download link with original filename
+                        const link = document.createElement('a');
+                        link.href = URL.createObjectURL(blob);
+                        link.download = version.originalName || `${groupName}_${versionId}`;
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+
+                        // Free up memory
+                        URL.revokeObjectURL(link.href);
+                    }
+                };
+            }
+
+            deleteVersion(groupName, versionId) {
+                const transaction = this.db.transaction(['files'], 'readwrite');
+                const store = transaction.objectStore('files');
+                const request = store.get(groupName);
+
+                request.onsuccess = (event) => {
+                    const group = event.target.result;
+                    group.versions = group.versions.filter(v => v.versionId !== versionId);
+                    
+                    if (group.versions.length === 0) {
+                        store.delete(groupName);
+                    } else {
+                        store.put(group);
+                    }
+
+                    // Ensure we always call getStoredFiles to refresh the interface
+                    this.getStoredFiles();
+                    
+                    // Reopen the modal if there are still versions
+                    if (group.versions.length > 0) {
+                        this.showVersionModal(groupName);
+                    } else {
+                        this.closeVersionModal();
+                    }
+                };
+            }
+
+            deleteBatch(groupName) {
+                const confirmDelete = confirm(`Voulez-vous vraiment supprimer tous les fichiers du lot "${groupName}" ?`);
+                
+                if (confirmDelete) {
+                    const transaction = this.db.transaction(['files'], 'readwrite');
+                    const store = transaction.objectStore('files');
+                    store.delete(groupName);
+
+                    // Ensure we always call getStoredFiles to refresh the interface
+                    this.getStoredFiles();
+                    this.closeVersionModal();
+                }
+            }
+
+            formatBytes(bytes) {
+                if (bytes === 0) return '0 Octets';
+                const k = 1024;
+                const sizes = ['Octets', 'Ko', 'Mo', 'Go', 'To'];
+                const i = Math.floor(Math.log(bytes) / Math.log(k));
+                return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+            }
+
+            backupFiles() {
+                const transaction = this.db.transaction(['files'], 'readonly');
+                const store = transaction.objectStore('files');
+                const request = store.getAll();
+
+                request.onsuccess = (event) => {
+                    const files = event.target.result;
+                    const jsonBackup = JSON.stringify(files);
+                    const blob = new Blob([jsonBackup], {type: 'application/json'});
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(blob);
+                    link.download = `snapfile_backup_${new Date().toISOString().replace(/:/g, '-')}.json`;
+                    link.click();
+                };
+            }
+
+            restoreFiles(event) {
+                const file = event.target.files[0];
+                const reader = new FileReader();
+
+                reader.onload = (e) => {
+                    try {
+                        const files = JSON.parse(e.target.result);
+                        const transaction = this.db.transaction(['files'], 'readwrite');
+                        const store = transaction.objectStore('files');
+
+                        // Clear existing data first
+                        const clearRequest = store.clear();
+                        
+                        clearRequest.onsuccess = () => {
+                            // Add restored files
+                            files.forEach(file => {
+                                store.put(file);
+                            });
+
+                            // Ensure interface updates after restore
+                            transaction.oncomplete = () => {
+                                this.getStoredFiles();
+                            };
+                        };
+                    } catch (error) {
+                        console.error("Erreur lors de la restauration des fichiers:", error);
+                    }
+                };
+
+                reader.readAsText(file);
+            }
+
+            closeVersionModal() {
+                const modal = document.getElementById('versionModal');
+                if (modal) {
+                    modal.style.display = 'none';
+                }
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            window.fileStorage = new FileStorage();
+        });
+    </script>
+</body>
+</html>
