@@ -274,9 +274,18 @@
                 const fileListContainer = document.getElementById('fileList');
                 fileListContainer.innerHTML = '';
 
-                Object.entries(files).forEach(([groupName, groupFiles]) => {
-                    if (groupFiles.length === 0) return;  // Skip empty groups
+                // Convertir l'objet files en tableau et ajouter la date de dernière modification
+                const sortedFiles = Object.entries(files)
+                    .map(([groupName, groupFiles]) => ({
+                        groupName,
+                        groupFiles,
+                        lastModified: groupFiles.length > 0 ? 
+                            new Date(groupFiles[groupFiles.length - 1].timestamp).getTime() : 0
+                    }))
+                    .filter(group => group.groupFiles.length > 0)
+                    .sort((a, b) => b.lastModified - a.lastModified);
 
+                sortedFiles.forEach(({groupName, groupFiles}) => {
                     const groupDiv = document.createElement('div');
                     groupDiv.classList.add('file-group');
                     
@@ -321,14 +330,17 @@
                     const modalVersionList = document.getElementById('modalVersionList');
                     modalVersionList.innerHTML = '';
                     
-                    group.versions.forEach((file, index) => {
+                    // Créer une copie inversée du tableau des versions
+                    const reversedVersions = [...group.versions].reverse();
+                    
+                    reversedVersions.forEach((file, index) => {
                         const versionItem = document.createElement('div');
                         versionItem.classList.add('file-version');
                         
                         const versionDetails = document.createElement('div');
                         versionDetails.classList.add('version-details');
                         versionDetails.innerHTML = `
-                            <strong>Version ${index + 1}</strong><br>
+                            <strong>Version ${group.versions.length - index}</strong><br>
                             Taille: ${this.formatBytes(file.size)}<br>
                             Ajouté le: ${new Date(file.timestamp).toLocaleString()}
                         `;
